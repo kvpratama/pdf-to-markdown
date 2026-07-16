@@ -1,9 +1,16 @@
-"""Command-line tool to download an arXiv PDF and convert it to Markdown via Docling.
+"""Command-line tool to download an arXiv PDF and convert it to Markdown.
+
+Two conversion backends are supported and run in parallel by default so the
+outputs can be compared side-by-side:
+
+  * **Docling** – writes to ``docling/`` (auto-created)
+  * **MarkItDown** (Microsoft) – writes to ``markitdown/`` (auto-created)
 
 Usage:
     uv run main.py https://arxiv.org/pdf/0000.00000
-    uv run main.py https://arxiv.org/pdf/0000.00000 --force
-    uv run main.py https://arxiv.org/pdf/0000.00000 --yes
+    uv run main.py https://arxiv.org/pdf/0000.00000 --converter docling
+    uv run main.py https://arxiv.org/pdf/0000.00000 --converter markitdown
+    uv run main.py https://arxiv.org/pdf/0000.00000 --force --yes
 
 The script:
   1. Parses the arXiv URL and extracts the arXiv ID.
@@ -11,9 +18,10 @@ The script:
      unless ``--force`` is supplied).
   3. Validates the downloaded file is a non-corrupted PDF (checks magic bytes
      and ``%%EOF`` trailer).
-  4. Runs Docling to convert the PDF into Markdown and writes the result to
-     ``docling/`` (auto-created).  If the Markdown already exists the user
-     is prompted before overwriting (``--yes`` skips the prompt).
+  4. Runs the selected converter(s) to obtain Markdown text.
+  5. Writes each Markdown file to its dedicated directory, prompting before
+     overwriting an existing file (``--yes`` skips the prompt).
+  6. Re-reads each written file to confirm integrity before reporting success.
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -33,6 +41,13 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parent
 PDF_DIR = PROJECT_ROOT / "pdf"
 DOCLING_REPO_DIR = PROJECT_ROOT / "docling"
+MARKITDOWN_DIR = PROJECT_ROOT / "markitdown"
+
+# Choices accepted by ``--converter``.
+CONVERTER_BOTH = "both"
+CONVERTER_DOCLING = "docling"
+CONVERTER_MARKITDOWN = "markitdown"
+ALL_CONVERTERS = (CONVERTER_DOCLING, CONVERTER_MARKITDOWN)
 
 # arXiv identifiers look like ``1234.56789`` (with an optional version such as
 # ``v1`` or ``v3``).  The PDF URL form is ``/pdf/<id>`` (optionally ``.pdf``).
@@ -51,7 +66,10 @@ USER_AGENT = "pdf-to-markdown/0.1 (+https://arxiv.org)"
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse the command-line arguments."""
     parser = argparse.ArgumentParser(
-        description=("Download an arXiv PDF and convert it to Markdown with Docling.")
+        description=(
+            "Download an arXiv PDF and convert it to Markdown. "
+            "Runs both Docling and MarkItDown by default."
+        )
     )
     parser.add_argument(
         "url",
@@ -66,7 +84,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--yes",
         "-y",
         action="store_true",
-        help="Overwrite the existing Markdown file without prompting.",
+        help="Overwrite existing Markdown files without prompting.",
+    )
+    parser.add_argument(
+        "--converter",
+        choices=[CONVERTER_BOTH, CONVERTER_DOCLING, CONVERTER_MARKITDOWN],
+        default=CONVERTER_BOTH,
+        help=(
+            "Which converter(s) to run. Default: %(default)s, which runs both "
+            "Docling and MarkItDown so the outputs can be compared."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -203,6 +230,29 @@ def convert_with_docling(pdf_path: Path) -> str:
     return markdown
 
 
+def convert_with_markitdown(pdf_path: Path) -> str:
+    """Run Microsoft MarkItDown on ``pdf_path`` and return Markdown text."""
+    # Lazy import for the same reasons as ``convert_with_docling``.
+    try:
+        from markitdown import MarkItDown
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise RuntimeError(
+            "MarkItDown is not installed. Run `uv add markitdown` to install it."
+        ) from exc
+
+    print(f"[markitdown] Converting {pdf_path} to Markdown ...")
+    try:
+        md = MarkItDown()
+        result = md.convert(str(pdf_path))
+    except Exception as exc:  # noqa: BLE001 - MarkItDown raises broad errors
+        raise RuntimeError(f"MarkItDown failed on {pdf_path}: {exc}") from exc
+
+    text = getattr(result, "text_content", None)
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("MarkItDown produced empty Markdown output.")
+    return text
+
+
 def write_markdown(
     content: str,
     destination: Path,
@@ -247,6 +297,67 @@ def write_markdown(
     return destination
 
 
+def validate_markdown(path: Path, *, expected_chars: int) -> bool:
+    """Verify ``path`` is a non-empty Markdown file matching what we wrote.
+
+    Re-reads the file from disk so we detect truncation, encoding errors, or
+    concurrent modification immediately after writing.
+    """
+    if not path.is_file():
+        print(f"[error] Output file missing after write: {path}", file=sys.stderr)
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[error] Cannot re-read {path}: {exc}", file=sys.stderr)
+        return False
+    if not content.strip():
+        print(f"[error] Output file is empty: {path}", file=sys.stderr)
+        return False
+    if len(content) != expected_chars:
+        print(
+            f"[error] Output file size mismatch at {path}: "
+            f"expected {expected_chars} chars, found {len(content)}.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _run_converter(
+    name: str,
+    pdf_path: Path,
+    out_dir: Path,
+    converter_fn: Callable[[Path], str],
+    *,
+    overwrite: bool,
+) -> Optional[Path]:
+    """Run one converter end-to-end and write its Markdown output.
+
+    Returns the destination path on success, ``None`` on failure.  Errors are
+    logged to stderr and re-raised after marking the conversion as failed so
+    the caller can aggregate multiple converter outcomes.
+    """
+    ensure_directory(out_dir)
+    try:
+        markdown = converter_fn(pdf_path)
+    except (RuntimeError, OSError, PermissionError) as exc:
+        print(f"[error] {name} conversion failed: {exc}", file=sys.stderr)
+        return None
+
+    dest = out_dir / f"{pdf_path.stem}.md"
+    try:
+        write_markdown(markdown, dest, overwrite=overwrite)
+    except (RuntimeError, OSError, PermissionError) as exc:
+        print(f"[error] {name} write failed: {exc}", file=sys.stderr)
+        return None
+
+    if not validate_markdown(dest, expected_chars=len(markdown)):
+        return None
+    print(f"[ok] {name} output verified at {dest}")
+    return dest
+
+
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
@@ -262,17 +373,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     pdf_path = PDF_DIR / f"{arxiv_id}.pdf"
-    md_path = DOCLING_REPO_DIR / f"{arxiv_id}.md"
 
+    # Decide which converters to run.  ``both`` expands to the full set so the
+    # comparison workflow is the default; the user can narrow it down.
+    selected = (
+        list(ALL_CONVERTERS) if args.converter == CONVERTER_BOTH else [args.converter]
+    )
+
+    # Step 1: ensure every target directory exists with sane permissions.
     try:
-        # Step 1: ensure both target directories exist with sane permissions.
         ensure_directory(PDF_DIR)
-        ensure_directory(DOCLING_REPO_DIR)
+        if CONVERTER_DOCLING in selected:
+            ensure_directory(DOCLING_REPO_DIR)
+        if CONVERTER_MARKITDOWN in selected:
+            ensure_directory(MARKITDOWN_DIR)
 
         # Step 2: download the PDF (idempotent unless --force).
         pdf_path = download_pdf(args.url, pdf_path, force=args.force)
 
-        # Step 3: validate the PDF before handing it to Docling.
+        # Step 3: validate the PDF before handing it to any converter.
         if not is_valid_pdf(pdf_path):
             print(
                 f"[error] {pdf_path} is not a valid PDF (bad magic or "
@@ -280,17 +399,33 @@ def main(argv: Optional[list[str]] = None) -> int:
                 file=sys.stderr,
             )
             return 1
-
-        # Step 4: run Docling to obtain Markdown.
-        markdown = convert_with_docling(pdf_path)
-
-        # Step 5: persist the Markdown, prompting for overwrite if needed.
-        write_markdown(markdown, md_path, overwrite=args.yes)
     except PermissionError as exc:
         print(f"[error] {exc}", file=sys.stderr)
         return 1
     except (RuntimeError, OSError) as exc:
         print(f"[error] {exc}", file=sys.stderr)
+        return 1
+
+    # Step 4: run each selected converter.  We attempt all of them so a
+    # failure in one backend does not block the other output; the exit code
+    # reflects the aggregate outcome.
+    results: dict[str, Optional[Path]] = {}
+    for name in selected:
+        if name == CONVERTER_DOCLING:
+            out_dir, fn = DOCLING_REPO_DIR, convert_with_docling
+        elif name == CONVERTER_MARKITDOWN:
+            out_dir, fn = MARKITDOWN_DIR, convert_with_markitdown
+        else:  # pragma: no cover - argparse already validated the choice
+            print(f"[error] Unknown converter: {name}", file=sys.stderr)
+            return 1
+        results[name] = _run_converter(name, pdf_path, out_dir, fn, overwrite=args.yes)
+
+    failed = [name for name, path in results.items() if path is None]
+    if failed:
+        print(
+            f"[error] Failed converters: {', '.join(failed)}",
+            file=sys.stderr,
+        )
         return 1
 
     print("[done] Workflow completed successfully.")
