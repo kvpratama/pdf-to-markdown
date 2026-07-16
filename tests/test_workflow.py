@@ -81,12 +81,12 @@ def test_run_workflow_runs_both_converters_by_default(
     )
 
 
-def test_run_workflow_returns_two_for_invalid_url(
+def test_run_workflow_returns_two_for_empty_url(
     app_config: AppConfig,
     fake_download: callable,
 ) -> None:
     result = run_workflow(
-        url="not-a-url",
+        url="",
         selected_converters=None,
         force=False,
         overwrite=False,
@@ -130,3 +130,49 @@ def test_run_workflow_continues_when_one_converter_fails(
         result.outputs[CONVERTER_MARKITDOWN]
         == app_config.markitdown_dir / "1234.56789.md"
     )
+
+
+def test_run_workflow_accepts_arbitrary_pdf_url(
+    app_config: AppConfig,
+    fake_download: callable,
+) -> None:
+    def stub_convert(pdf_path: Path) -> str:
+        del pdf_path
+        return DOCLING_MARKDOWN
+
+    result = run_workflow(
+        url="https://example.com/papers/my-report.pdf",
+        selected_converters=[CONVERTER_DOCLING],
+        force=False,
+        overwrite=True,
+        config=app_config,
+        converters={CONVERTER_DOCLING: stub_convert},
+        download_pdf_fn=fake_download,
+    )
+
+    assert result.exit_code == 0
+    assert result.doc_id == "my-report"
+    assert result.pdf_path == app_config.pdf_dir / "my-report.pdf"
+    assert result.outputs[CONVERTER_DOCLING] == app_config.docling_dir / "my-report.md"
+
+
+def test_run_workflow_arxiv_url_sets_doc_id(
+    app_config: AppConfig,
+    fake_download: callable,
+) -> None:
+    def stub_convert(pdf_path: Path) -> str:
+        del pdf_path
+        return DOCLING_MARKDOWN
+
+    result = run_workflow(
+        url="https://arxiv.org/pdf/1234.56789",
+        selected_converters=[CONVERTER_DOCLING],
+        force=False,
+        overwrite=True,
+        config=app_config,
+        converters={CONVERTER_DOCLING: stub_convert},
+        download_pdf_fn=fake_download,
+    )
+
+    assert result.exit_code == 0
+    assert result.doc_id == "1234.56789"

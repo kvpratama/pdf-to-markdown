@@ -33,3 +33,9 @@ def test_main_shim_delegates_to_package_cli(monkeypatch) -> None:
 
     assert main.main(["--help"]) == 7
     assert seen == [["--help"]]
+
+
+def test_parse_args_accepts_arbitrary_pdf_url() -> None:
+    args = cli.parse_args(["https://example.com/paper.pdf"])
+    assert args.url == "https://example.com/paper.pdf"
+    assert args.converter == CONVERTER_BOTH

@@ -1,11 +1,11 @@
 # pdf-to-markdown
 
-Download an arXiv PDF and convert it to Markdown, with the option of running two
+Download a PDF and convert it to Markdown, with the option of running two
 backends side by side so the outputs can be compared.
 
-The tool accepts an arXiv URL, downloads the PDF into a local `pdf/` directory,
-validates the file is a real PDF, and then runs one or both of the supported
-conversion backends:
+The tool accepts any PDF URL (including arXiv links), downloads the PDF into a
+local `pdf/` directory, validates the file is a real PDF, and then runs one or
+both of the supported conversion backends:
 
 - **Docling** writes Markdown to `docling/`.
 - **MarkItDown** (Microsoft) writes Markdown to `markitdown/`.
@@ -31,7 +31,7 @@ can also be selected on its own.
 
 ## Features
 
-- One-command download of an arXiv PDF, with idempotent local caching.
+- One-command download of a PDF from any URL, with idempotent local caching.
 - Built-in PDF integrity check (magic bytes plus `%%EOF` trailer).
 - Pluggable converter registry; new backends can be added by registering an
   adapter without changing the CLI or the workflow.
@@ -51,7 +51,7 @@ can also be selected on its own.
 - Python **3.14** (see `.python-version`).
 - [`uv`](https://docs.astral.sh/uv/) for environment and dependency
   management.
-- Network access to `arxiv.org` to download PDFs.
+- Network access to download PDFs (e.g. from `arxiv.org` or any other host).
 - Disk space for the two converter backends; `docling` and `markitdown[all]`
   ship with large optional extras and model assets.
 
@@ -79,17 +79,23 @@ The package ships a CLI that can be launched either through the
 `pdf-to-markdown` shim or directly:
 
 ```bash
-# Default: download the PDF and run both converters.
+# Default: download the PDF and run both converters (arXiv URL).
 uv run main.py https://arxiv.org/pdf/0000.00000
 
+# Works with any direct PDF link too.
+uv run main.py https://example.com/papers/my-report.pdf
+
 # Or use the module entrypoint.
-uv run python -m pdf_to_markdown https://arxiv.org/pdf/0000.00000
+uv run python -m pdf_to_markdown https://example.com/paper.pdf
 ```
 
 After a successful run, the converted Markdown files live at:
 
-- `docling/0000.00000.md`
-- `markitdown/0000.00000.md`
+- `docling/<doc_id>.md`
+- `markitdown/<doc_id>.md`
+
+Where `<doc_id>` is the arXiv identifier (e.g. `1234.56789`) for arXiv URLs,
+or the filename stem (e.g. `my-report`) for other PDF URLs.
 
 ### Selecting a converter
 
@@ -116,18 +122,23 @@ uv run main.py https://arxiv.org/pdf/0000.00000 --yes
 
 ### Supported URL forms
 
-Any URL containing an arXiv identifier is accepted, for example:
+Any URL containing an arXiv identifier is recognized as an arXiv URL:
 
 - `https://arxiv.org/pdf/0000.00000`
 - `https://arxiv.org/pdf/1234.56789v1`
 - `https://arxiv.org/pdf/1234.56789.pdf`
 - `https://arxiv.org/abs/1234.56789`
 
+Any other HTTP/HTTPS URL pointing to a PDF file is also accepted:
+
+- `https://example.com/paper.pdf`
+- `https://example.com/docs/report.pdf?token=abc`
+
 ## CLI Reference
 
 | Flag            | Short | Description                                                                 |
 | --------------- | ----- | --------------------------------------------------------------------------- |
-| `url`           |       | arXiv PDF URL, e.g. `https://arxiv.org/pdf/0000.00000`. Required.           |
+| `url`           |       | PDF URL (arXiv or any direct PDF link). Required.                           |
 | `--force`       |       | Re-download the PDF even if it already exists locally.                      |
 | `--yes`         | `-y`  | Overwrite existing Markdown files without prompting.                        |
 | `--converter`   |       | Which converter(s) to run. Choices: `both` (default), `docling`, `markitdown`. |

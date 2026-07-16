@@ -9,5 +9,5 @@ class WorkflowResult:
     exit_code: int
     outputs: dict[str, Path | None] = field(default_factory=dict)
     failed_converters: list[str] = field(default_factory=list)
-    arxiv_id: str | None = None
+    doc_id: str | None = None
     pdf_path: Path | None = None

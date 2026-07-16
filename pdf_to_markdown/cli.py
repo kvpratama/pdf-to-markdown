@@ -18,13 +18,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Download an arXiv PDF and convert it to Markdown. "
+            "Download a PDF and convert it to Markdown. "
+            "Accepts arXiv URLs or any direct PDF link. "
             "Runs both Docling and MarkItDown by default."
         )
     )
     parser.add_argument(
         "url",
-        help="arXiv PDF URL, e.g. https://arxiv.org/pdf/0000.00000",
+        help=(
+            "PDF URL. Supports arXiv URLs (e.g. https://arxiv.org/pdf/0000.00000) "
+            "or any direct PDF link (e.g. https://example.com/paper.pdf)."
+        ),
     )
     parser.add_argument(
         "--force",

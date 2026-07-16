@@ -4,7 +4,7 @@ import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from pdf_to_markdown.arxiv import extract_arxiv_id
+from pdf_to_markdown.url_utils import extract_doc_id
 from pdf_to_markdown.config import ALL_CONVERTERS, AppConfig
 from pdf_to_markdown.downloader import download_pdf
 from pdf_to_markdown.models import WorkflowResult
@@ -88,18 +88,18 @@ def run_workflow(
         err_log = _default_err_log
 
     try:
-        arxiv_id = extract_arxiv_id(url)
+        doc_id = extract_doc_id(url)
     except ValueError as exc:
         err_log(f"[error] {exc}")
         return WorkflowResult(exit_code=2)
 
-    pdf_path = config.pdf_dir / f"{arxiv_id}.pdf"
+    pdf_path = config.pdf_dir / f"{doc_id}.pdf"
 
     try:
         selected = _resolve_converters(selected_converters, converters)
     except KeyError as exc:
         err_log(f"[error] {exc}")
-        return WorkflowResult(exit_code=1, arxiv_id=arxiv_id, pdf_path=pdf_path)
+        return WorkflowResult(exit_code=1, doc_id=doc_id, pdf_path=pdf_path)
 
     for name in selected:
         output_dir = config.output_dir_for(name)
@@ -109,14 +109,14 @@ def run_workflow(
             err_log(f"[error] Cannot create directory {output_dir}: permission denied.")
             return WorkflowResult(
                 exit_code=1,
-                arxiv_id=arxiv_id,
+                doc_id=doc_id,
                 pdf_path=pdf_path,
             )
         except OSError as exc:
             err_log(f"[error] Failed to create directory {output_dir}: {exc}")
             return WorkflowResult(
                 exit_code=1,
-                arxiv_id=arxiv_id,
+                doc_id=doc_id,
                 pdf_path=pdf_path,
             )
 
@@ -131,16 +131,16 @@ def run_workflow(
         )
     except PermissionError as exc:
         err_log(f"[error] {exc}")
-        return WorkflowResult(exit_code=1, arxiv_id=arxiv_id, pdf_path=pdf_path)
+        return WorkflowResult(exit_code=1, doc_id=doc_id, pdf_path=pdf_path)
     except (RuntimeError, OSError) as exc:
         err_log(f"[error] {exc}")
-        return WorkflowResult(exit_code=1, arxiv_id=arxiv_id, pdf_path=pdf_path)
+        return WorkflowResult(exit_code=1, doc_id=doc_id, pdf_path=pdf_path)
 
     if not is_valid_pdf(pdf_path):
         err_log(
             f"[error] {pdf_path} is not a valid PDF (bad magic or missing %%EOF marker)."
         )
-        return WorkflowResult(exit_code=1, arxiv_id=arxiv_id, pdf_path=pdf_path)
+        return WorkflowResult(exit_code=1, doc_id=doc_id, pdf_path=pdf_path)
 
     outputs: dict[str, Path | None] = {}
     failed_converters: list[str] = []
@@ -165,7 +165,7 @@ def run_workflow(
             exit_code=1,
             outputs=outputs,
             failed_converters=failed_converters,
-            arxiv_id=arxiv_id,
+            doc_id=doc_id,
             pdf_path=pdf_path,
         )
 
@@ -174,6 +174,6 @@ def run_workflow(
         exit_code=0,
         outputs=outputs,
         failed_converters=[],
-        arxiv_id=arxiv_id,
+        doc_id=doc_id,
         pdf_path=pdf_path,
     )
